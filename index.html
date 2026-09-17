@@ -92,6 +92,35 @@
     25%, 65% { stroke: var(--ink-1); stroke-width: 3; }
   }
   .tile rect.flash { animation: flashPulse 1.4s ease 2; }
+
+  body.commenting .tile rect { cursor: crosshair; }
+  #modePill {
+    display: none; font-size: 12px; padding: 4px 10px; border-radius: 999px;
+    background: var(--grid); color: var(--ink-1); white-space: nowrap; flex: 0 0 auto;
+  }
+  body.commenting #modePill { display: block; }
+  .cbadge { cursor: pointer; }
+  .cbadge circle { fill: var(--ink-1); opacity: .88; }
+  .cbadge text { fill: var(--surface-1); font-size: 10px; font-weight: 700;
+                 text-anchor: middle; dominant-baseline: central; }
+  .cmt { border-top: 1px solid var(--hairline); padding: 8px 0; }
+  .cmt .ca { font-weight: 650; font-size: 12px; }
+  .cmt .ct2 { color: var(--ink-3); font-size: 10px; margin-left: 6px; }
+  .cmt .cb { color: var(--ink-2); margin-top: 2px; white-space: pre-wrap; }
+  #cform { margin-top: 14px; }
+  #cform textarea, #cform input {
+    width: 100%; font: inherit; font-size: 13px; background: var(--page);
+    color: var(--ink-1); border: 1px solid var(--hairline); border-radius: 6px;
+    padding: 8px;
+  }
+  #cform textarea { min-height: 70px; resize: vertical; }
+  #cform input { margin-bottom: 8px; padding: 6px 8px; }
+  #cform button {
+    margin-top: 8px; font: inherit; font-size: 13px; border: none;
+    border-radius: 6px; padding: 7px 14px; background: var(--ink-1);
+    color: var(--surface-1); cursor: pointer;
+  }
+  #cform .err { color: #d03b3b; font-size: 12px; margin-top: 6px; }
   #crumbs .crumb {
     background: none; border: none; padding: 4px 8px; border-radius: 6px;
     font: inherit; color: var(--ink-2); cursor: pointer;
@@ -171,11 +200,12 @@
 <body>
 <header>
   <h1>Drilldown: Interactive Topic Explorer</h1>
-  <p>Pick a topic, then click tiles to drill deeper. Click a leaf for details. Esc or Back moves up one level.</p>
+  <p>Pick a topic, then click tiles to drill deeper. Click a leaf for details. Keys: c comment mode, f fullscreen, / search, Esc up one level.</p>
 </header>
 
 <div id="topbar">
   <div id="crumbs"></div>
+  <span id="modePill">💬 Comment mode: click a tile to comment on it (c to exit)</span>
   <div id="search">
     <input id="searchInput" type="text" placeholder="Search components...  ( / )" autocomplete="off" spellcheck="false">
     <div id="searchResults"></div>
@@ -214,6 +244,29 @@ async function loadTopics() {
 }
 
 let DATA = null;
+
+/* ---------------- comments ---------------- */
+let COMMENTS = {};   // node_path -> [{author, body, created_at}]
+let commentMode = false;
+const pathKey = n => n.path.join("/");
+
+async function loadComments() {
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/drilldown_comments?select=node_path,author,body,created_at&order=created_at.asc`, {
+      headers: { apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}` }
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    COMMENTS = {};
+    for (const c of await r.json()) (COMMENTS[c.node_path] ||= []).push(c);
+  } catch (e) {
+    console.warn("Comments fetch failed:", e);
+  }
+}
+
+function setCommentMode(on) {
+  commentMode = on;
+  document.body.classList.toggle("commenting", on);
+}
 
 /* slots: each topic and each component inside a topic gets its own hue; deeper levels inherit */
 function annotate(node, slot, path, depth) {
@@ -304,6 +357,14 @@ function render(direction, originRect) {
     .attr("class", d => "tlabel" + (view.home ? " hero" : ""))
     .html(d => tileLabel(d, view));
 
+  const badged = tile.filter(d => (COMMENTS[pathKey(d.data.src)] || []).length > 0)
+    .append("g")
+    .attr("class", "cbadge")
+    .attr("transform", d => `translate(${Math.max(16, d.x1 - d.x0 - 16)},15)`)
+    .on("click", (ev, d) => { ev.stopPropagation(); openComments(d.data.src); });
+  badged.append("circle").attr("r", 9);
+  badged.append("text").text(d => (COMMENTS[pathKey(d.data.src)] || []).length);
+
   /* zoom transition */
   if (oldG.node()) {
     if (direction === "down" && originRect) {
@@ -355,6 +416,7 @@ function tileLabel(d, view) {
 
 function onTileClick(ev, d) {
   const src = d.data.src;
+  if (commentMode) { openComments(src); return; }
   if (src.children) {
     closeDrawer();
     stack.push(src);
@@ -409,6 +471,63 @@ function closeDrawer() {
 }
 document.getElementById("panelClose").onclick = closeDrawer;
 scrimEl.onclick = closeDrawer;
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function openComments(n) {
+  const list = COMMENTS[pathKey(n)] || [];
+  let html = `<h2>💬 ${escapeHtml(n.name)}</h2>`;
+  html += `<div class="path">${escapeHtml(n.path.join(" / "))}</div>`;
+  html += list.length
+    ? list.map(c =>
+        `<div class="cmt"><span class="ca">${escapeHtml(c.author || "anon")}</span>` +
+        `<span class="ct2">${new Date(c.created_at).toLocaleString()}</span>` +
+        `<div class="cb">${escapeHtml(c.body)}</div></div>`).join("")
+    : `<div class="desc">No comments yet. Be the first.</div>`;
+  html += `<div id="cform">
+    <input id="cAuthor" placeholder="Your name (optional)" maxlength="80">
+    <textarea id="cBody" placeholder="Write a comment..." maxlength="2000"></textarea>
+    <div><button id="cSubmit">Add comment</button></div>
+    <div class="err" id="cErr"></div>
+  </div>`;
+  document.getElementById("panelContent").innerHTML = html;
+  document.getElementById("cAuthor").value = localStorage.getItem("dd_author") || "";
+  document.getElementById("cSubmit").onclick = () => submitComment(n);
+  panelEl.classList.add("open");
+  panelEl.setAttribute("aria-hidden", "false");
+  scrimEl.classList.add("open");
+}
+
+async function submitComment(n) {
+  const author = document.getElementById("cAuthor").value.trim();
+  const body = document.getElementById("cBody").value.trim();
+  const err = document.getElementById("cErr");
+  if (!body) { err.textContent = "Comment is empty."; return; }
+  localStorage.setItem("dd_author", author);
+  const btn = document.getElementById("cSubmit");
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/drilldown_comments`, {
+      method: "POST",
+      headers: {
+        apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}`,
+        "Content-Type": "application/json", Prefer: "return=representation"
+      },
+      body: JSON.stringify({ node_path: pathKey(n), author: author || null, body })
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const [row] = await r.json();
+    (COMMENTS[pathKey(n)] ||= []).push(row);
+    render("none");        // refresh badges
+    openComments(n);       // refresh thread
+  } catch (e) {
+    err.textContent = "Failed to save: " + e.message;
+    btn.disabled = false;
+  }
+}
 
 function renderCrumbs() {
   const el = document.getElementById("crumbs");
@@ -539,18 +658,26 @@ sInput.addEventListener("keydown", e => {
 sInput.addEventListener("blur", () => setTimeout(closeSearch, 120));
 
 document.addEventListener("keydown", e => {
-  if (e.target.tagName === "INPUT") return;
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
   if (e.key === "/") { e.preventDefault(); sInput.focus(); return; }
+  if (e.key === "c" || e.key === "C") { setCommentMode(!commentMode); return; }
+  if (e.key === "f" || e.key === "F") {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen();
+    return;
+  }
   if (e.key === "Escape" || e.key === "Backspace") {
     e.preventDefault();
     if (panelEl.classList.contains("open")) closeDrawer();
+    else if (commentMode) setCommentMode(false);
     else goUp();
   }
 });
+document.addEventListener("fullscreenchange", () => render("none"));
 window.addEventListener("resize", () => render("none"));
 
 (async function init() {
-  const topics = await loadTopics();
+  const [topics] = await Promise.all([loadTopics(), loadComments()]);
   DATA = { name: "Topics", desc: "", home: true, children: topics };
   annotate(DATA, 0, [], 0);
   stack = [DATA];

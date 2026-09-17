@@ -313,7 +313,7 @@ function prune(node, depth, maxDepth, equal) {
 }
 
 function layout(viewNode) {
-  const maxDepth = viewNode.home ? 1 : 2;   // home: one equal-sized tile per topic
+  const maxDepth = 1;   // show only direct children; click a tile to go one level deeper
   const root = d3.hierarchy(prune(viewNode, 0, maxDepth, viewNode.home))
     .sum(d => d.value || 0)
     .sort((a, b) => b.value - a.value);

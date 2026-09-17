@@ -303,7 +303,7 @@ function annotate(node, slot, path, depth) {
       annotate(c, depth < 2 ? i : slot, path.concat(c.name), depth + 1));
     node.total = node.children.reduce((s, c) => s + c.total, 0);
   } else {
-    node.total = node.w || 1;
+    node.total = 1;   // equal weight per leaf; keeps siblings readable, no slivers
   }
 }
 annotate(DATA, 0, [], 0);
@@ -327,7 +327,8 @@ function prune(node, depth, maxDepth, equal) {
   if (node.children && depth < maxDepth) {
     copy.children = node.children.map(c => prune(c, depth + 1, maxDepth, equal));
   } else {
-    copy.value = equal ? 1 : node.total;
+    // sqrt damping: bigger subtrees get more room, but never crush siblings into slivers
+    copy.value = equal ? 1 : Math.sqrt(node.total);
   }
   return copy;
 }
@@ -338,6 +339,7 @@ function layout(viewNode) {
     .sum(d => d.value || 0)
     .sort((a, b) => b.value - a.value);
   d3.treemap()
+    .tile(d3.treemapSquarify.ratio(1))
     .size([W, H])
     .paddingOuter(4)
     .paddingTop(d => d.depth === 1 && d.children ? 30 : 4)

@@ -28,3 +28,13 @@ To add or edit topics:
 3. Commit and push so the fallback stays in sync
 
 Content-only changes take effect via the seed alone; no redeploy needed.
+
+## AI expansion
+
+Ctrl+click (Cmd+click on Mac) any tile and the app generates 3 to 6 deeper sub-topics for it. Calls the Supabase Edge Function `ai-expand` (`supabase/functions/ai-expand/`), which proxies OpenRouter free models (`openrouter/free`, key stored as a Supabase secret, never in the client) and caches results in `drilldown_ai_expansions` so each node is generated once and shared by all visitors. Generated tiles are marked with a sparkle.
+
+Deploy after changes: `supabase functions deploy ai-expand --project-ref qsjrdhlaylhdnxkbbbof`
+
+## Comments
+
+Press `c`, click any tile, write a comment; threads persist in `drilldown_comments` (anon read + insert via RLS). Commented tiles show a count badge.

@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AWS Bedrock AgentCore: Interactive Component Map</title>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<style>
+  :root {
+    --surface-1: #fcfcfb;
+    --page:      #f9f9f7;
+    --ink-1:     #0b0b0b;
+    --ink-2:     #52514e;
+    --ink-3:     #898781;
+    --hairline:  rgba(11,11,11,0.10);
+    --grid:      #e1e0d9;
+    --s0: #2a78d6;  /* blue    - Runtime  */
+    --s1: #1baf7a;  /* aqua    - Gateway  */
+    --s2: #eda100;  /* yellow  - Memory   */
+    --s3: #008300;  /* green   - Identity */
+    --s4: #4a3aa7;  /* violet  - Tools    */
+    --s5: #e34948;  /* red     - Observability */
+    --shadow: rgba(11,11,11,0.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1: #1a1a19;
+      --page:      #0d0d0d;
+      --ink-1:     #ffffff;
+      --ink-2:     #c3c2b7;
+      --ink-3:     #898781;
+      --hairline:  rgba(255,255,255,0.10);
+      --grid:      #2c2c2a;
+      --s0: #3987e5;
+      --s1: #199e70;
+      --s2: #c98500;
+      --s3: #008300;
+      --s4: #9085e9;
+      --s5: #e66767;
+      --shadow: rgba(0,0,0,0.5);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; overflow: hidden;
+    display: flex; flex-direction: column;
+    background: var(--page);
+    color: var(--ink-1);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header { padding: 14px 24px 4px; flex: 0 0 auto; }
+  header h1 { font-size: 18px; margin: 0 0 2px; font-weight: 650; }
+  header p  { font-size: 13px; margin: 0; color: var(--ink-2); }
+
+  #topbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 24px; flex: 0 0 auto;
+  }
+  #crumbs {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    font-size: 13px; flex: 1 1 auto; min-width: 0;
+  }
+  #search { position: relative; flex: 0 0 260px; }
+  #searchInput {
+    width: 100%; font: inherit; font-size: 13px;
+    background: var(--surface-1); color: var(--ink-1);
+    border: 1px solid var(--hairline); border-radius: 6px;
+    padding: 6px 10px; outline: none;
+  }
+  #searchInput:focus { border-color: var(--ink-3); }
+  #searchInput::placeholder { color: var(--ink-3); }
+  #searchResults {
+    display: none; position: absolute; top: calc(100% + 4px); right: 0;
+    width: 320px; max-height: 340px; overflow-y: auto; z-index: 20;
+    background: var(--surface-1); border: 1px solid var(--hairline);
+    border-radius: 8px; box-shadow: 0 6px 20px var(--shadow); padding: 4px;
+  }
+  .sItem {
+    display: block; width: 100%; text-align: left; border: none;
+    background: none; font: inherit; font-size: 13px; color: var(--ink-1);
+    padding: 7px 9px; border-radius: 6px; cursor: pointer;
+  }
+  .sItem.active { background: var(--grid); }
+  .sItem .rn { font-weight: 650; display: block; }
+  .sItem .rp { color: var(--ink-3); font-size: 11px; display: block; margin-top: 1px; }
+  .noRes { padding: 10px; font-size: 12px; color: var(--ink-3); }
+
+  @keyframes flashPulse {
+    0%, 100% { stroke: var(--hairline); stroke-width: 1; }
+    25%, 65% { stroke: var(--ink-1); stroke-width: 3; }
+  }
+  .tile rect.flash { animation: flashPulse 1.4s ease 2; }
+  #crumbs .crumb {
+    background: none; border: none; padding: 4px 8px; border-radius: 6px;
+    font: inherit; color: var(--ink-2); cursor: pointer;
+  }
+  #crumbs .crumb:hover { background: var(--grid); color: var(--ink-1); }
+  #crumbs .crumb.current { color: var(--ink-1); font-weight: 650; cursor: default; }
+  #crumbs .crumb.current:hover { background: none; }
+  #crumbs .sep { color: var(--ink-3); }
+  #backBtn {
+    border: 1px solid var(--hairline); background: var(--surface-1);
+    color: var(--ink-1); font: inherit; font-size: 13px;
+    padding: 4px 12px; border-radius: 6px; cursor: pointer; margin-right: 8px;
+  }
+  #backBtn:disabled { opacity: .4; cursor: default; }
+  #backBtn:not(:disabled):hover { background: var(--grid); }
+
+  #main { flex: 1 1 auto; min-height: 0; display: flex; padding: 0 24px 16px; }
+  #chartWrap {
+    flex: 1 1 auto; min-width: 0; height: 100%;
+    background: var(--surface-1);
+    border: 1px solid var(--hairline); border-radius: 10px;
+    padding: 10px;
+  }
+  svg { display: block; width: 100%; height: 100%; }
+
+  .tile rect {
+    stroke: var(--hairline); stroke-width: 1; rx: 5;
+    cursor: pointer;
+    filter: drop-shadow(2px 3px 3px var(--shadow));
+    transition: filter .15s;
+  }
+  .tile:hover > rect { filter: drop-shadow(3px 5px 6px var(--shadow)); }
+  .tile foreignObject { pointer-events: none; }
+  .tlabel { font-size: 12px; line-height: 1.25; color: var(--ink-1);
+            padding: 6px 8px; overflow: hidden; height: 100%; }
+  .tlabel .nm { font-weight: 650; display: block;
+                overflow: hidden; overflow-wrap: break-word; }
+  .tlabel .ds { color: var(--ink-2); font-size: 11px; display: block; margin-top: 2px; }
+  .tlabel .ct { color: var(--ink-2); font-size: 11px; font-weight: 400; }
+  .tlabel.hero { font-size: 20px; padding: 16px 18px; }
+  .tlabel.hero .ds { font-size: 13px; margin-top: 6px; }
+
+  #scrim {
+    position: fixed; inset: 0; z-index: 30;
+    background: rgba(0,0,0,0.25);
+    opacity: 0; pointer-events: none; transition: opacity .25s;
+  }
+  #scrim.open { opacity: 1; pointer-events: auto; }
+  #panel {
+    position: fixed; top: 0; right: 0; height: 100vh; z-index: 31;
+    width: min(360px, 90vw);
+    background: var(--surface-1);
+    border-left: 1px solid var(--hairline);
+    box-shadow: -8px 0 24px var(--shadow);
+    padding: 20px; font-size: 13px; overflow-y: auto;
+    transform: translateX(100%); transition: transform .28s ease;
+  }
+  #panel.open { transform: translateX(0); }
+  #panelClose {
+    position: absolute; top: 10px; right: 12px;
+    border: none; background: none; color: var(--ink-2);
+    font-size: 22px; line-height: 1; cursor: pointer; padding: 4px 8px;
+    border-radius: 6px;
+  }
+  #panelClose:hover { background: var(--grid); color: var(--ink-1); }
+  #panel h2 { font-size: 15px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+  #panel .swatch { width: 12px; height: 12px; border-radius: 3px; flex: 0 0 auto;
+                   border: 1px solid var(--hairline); }
+  #panel .path { color: var(--ink-3); font-size: 11px; margin-bottom: 10px; }
+  #panel .desc { color: var(--ink-2); line-height: 1.5; }
+  #panel ul { margin: 8px 0 0; padding-left: 18px; color: var(--ink-2); }
+  #panel li { margin: 3px 0; }
+  #panel .hint { margin-top: 12px; color: var(--ink-3); font-size: 11px; }
+
+</style>
+</head>
+<body>
+<header>
+  <h1>AWS Bedrock AgentCore: Component Map</h1>
+  <p>Click a tile to drill into it. Click a leaf for details. Esc or Back moves up one level.</p>
+</header>
+
+<div id="topbar">
+  <div id="crumbs"></div>
+  <div id="search">
+    <input id="searchInput" type="text" placeholder="Search components...  ( / )" autocomplete="off" spellcheck="false">
+    <div id="searchResults"></div>
+  </div>
+</div>
+
+<div id="main">
+  <div id="chartWrap"><svg id="chart"></svg></div>
+</div>
+
+<div id="scrim"></div>
+<aside id="panel" aria-hidden="true">
+  <button id="panelClose" aria-label="Close">&times;</button>
+  <div id="panelContent"></div>
+</aside>
+
+<script>
+/* ---------------- data ---------------- */
+const DATA = {
+  name: "AWS AgentCore",
+  desc: "Amazon Bedrock AgentCore: managed services to deploy and operate AI agents securely at scale, with any framework and any model.",
+  children: [
+    { name: "Runtime", desc: "Serverless, secure hosting for agents built with any framework.",
+      children: [
+        { name: "Serverless hosting", w: 3, desc: "Deploy agent code without managing servers or clusters. Package the agent, AgentCore provisions and scales it." },
+        { name: "Session isolation", w: 3, desc: "Each user session runs in its own dedicated microVM, so state and data never leak across sessions." },
+        { name: "Long-running sessions", w: 2, desc: "Sessions can run up to 8 hours, supporting asynchronous and multi-step agent workloads." },
+        { name: "Any framework", w: 2, desc: "Works with LangGraph, CrewAI, Strands Agents, or fully custom code. No SDK lock-in." },
+        { name: "Protocols and streaming", w: 2, desc: "Exposes HTTP and MCP endpoints and streams partial responses back to callers." }
+      ]},
+    { name: "Gateway", desc: "Turns existing APIs and Lambda functions into agent-ready MCP tools.",
+      children: [
+        { name: "Tool targets", desc: "Sources that Gateway converts into tools.",
+          children: [
+            { name: "Lambda functions", w: 2, desc: "Wrap existing AWS Lambda functions as MCP tools with no code changes." },
+            { name: "OpenAPI specs", w: 2, desc: "Point Gateway at an OpenAPI definition and every operation becomes a callable tool." },
+            { name: "Smithy models", w: 1, desc: "AWS Smithy service models can also be registered as tool targets." }
+          ]},
+        { name: "Managed MCP server", w: 2, desc: "Gateway exposes one managed MCP endpoint that agents connect to for all registered tools." },
+        { name: "Semantic tool search", w: 2, desc: "Agents can search across thousands of tools semantically and pull in only the relevant ones, keeping context small." },
+        { name: "Auth passthrough", w: 1, desc: "Integrates with AgentCore Identity so each tool call carries the right credentials." }
+      ]},
+    { name: "Memory", desc: "Managed short-term and long-term memory so agents remember context.",
+      children: [
+        { name: "Short-term memory", w: 3, desc: "Raw event storage per session: turns, tool calls, and checkpoints available for the active conversation." },
+        { name: "Long-term memory", desc: "Extracted knowledge that persists across sessions.",
+          children: [
+            { name: "Semantic strategy", w: 2, desc: "Extracts durable facts from conversations and stores them as retrievable memories." },
+            { name: "Summarization strategy", w: 2, desc: "Maintains rolling summaries of sessions so agents can resume with compact context." },
+            { name: "User preference strategy", w: 2, desc: "Learns per-user preferences (tone, formats, choices) and applies them in later sessions." },
+            { name: "Namespaces", w: 1, desc: "Scopes memories per actor, session, or application so retrieval stays tenant-safe." }
+          ]}
+      ]},
+    { name: "Identity", desc: "Secure identity and access for agents acting on behalf of users.",
+      children: [
+        { name: "Inbound auth", w: 2, desc: "Controls who may invoke the agent: IAM SigV4 or OAuth JWT bearer tokens validated at the door." },
+        { name: "Outbound auth", desc: "How the agent authenticates to downstream services.",
+          children: [
+            { name: "OAuth 2.0 flows", w: 2, desc: "Supports 2-legged (machine) and 3-legged (user consent) OAuth so agents act with delegated permissions." },
+            { name: "API keys", w: 1, desc: "Stores provider API keys and injects them into tool calls without exposing them to the model." }
+          ]},
+        { name: "Token vault", w: 2, desc: "Encrypted storage for tokens and secrets, with automatic refresh handling." },
+        { name: "Credential providers", w: 2, desc: "Prebuilt connectors for Google, GitHub, Slack, Salesforce, Atlassian, and custom OAuth providers." }
+      ]},
+    { name: "Built-in Tools", desc: "Managed tools agents can use out of the box.",
+      children: [
+        { name: "Code Interpreter", desc: "Sandboxed code execution for analysis and computation.",
+          children: [
+            { name: "Sandboxed execution", w: 2, desc: "Runs Python, JavaScript, or TypeScript in an isolated sandbox with no network by default." },
+            { name: "Session file I/O", w: 1, desc: "Upload data files, run code against them, and read generated artifacts back within the session." }
+          ]},
+        { name: "Browser", desc: "A managed cloud browser for web tasks.",
+          children: [
+            { name: "Cloud browser sessions", w: 2, desc: "Fast, isolated headless browser sessions managed by AWS, no fleet to run." },
+            { name: "CDP and Playwright", w: 1, desc: "Automate via Chrome DevTools Protocol or Playwright from the agent." },
+            { name: "Live view and replay", w: 1, desc: "Watch a live view of what the agent does in the browser and replay sessions for audit." }
+          ]}
+      ]},
+    { name: "Observability", desc: "Tracing, metrics, and debugging for agents in production.",
+      children: [
+        { name: "CloudWatch GenAI dashboards", w: 2, desc: "Prebuilt dashboards for agent health: invocations, latency, token usage, and error rates." },
+        { name: "OTEL traces and spans", w: 2, desc: "OpenTelemetry-compatible traces covering each step: model calls, tool calls, memory reads." },
+        { name: "Trajectory inspection", w: 2, desc: "Step through an agent session end to end to debug why it took a given path." },
+        { name: "Alerts and metrics", w: 1, desc: "Standard CloudWatch metrics and alarms on top of agent telemetry." }
+      ]}
+  ]
+};
+
+/* assign each node its top-level branch slot + leaf weight sums */
+function annotate(node, slot, path) {
+  node.slot = slot;
+  node.path = path.concat(node.name);
+  if (node.children) {
+    node.children.forEach((c, i) => annotate(c, slot === null ? i : slot, node.path));
+    node.total = node.children.reduce((s, c) => s + c.total, 0);
+  } else {
+    node.total = node.w || 1;
+  }
+}
+annotate(DATA, null, []);
+DATA.slot = 0;
+
+/* ---------------- state ---------------- */
+const HOME = { name: "Home", desc: "", children: [DATA], slot: 0, path: [], total: DATA.total, home: true };
+let stack = [HOME];                 // navigation stack, last = current view
+
+const svg = d3.select("#chart");
+let W = 900, H = 560;
+
+function measure() {
+  const wrap = document.getElementById("chartWrap");
+  W = Math.max(320, wrap.clientWidth - 20);
+  H = Math.max(300, wrap.clientHeight - 20);
+  svg.attr("viewBox", `0 0 ${W} ${H}`);
+}
+
+/* prune a subtree to a max depth; deeper content collapses into a sized leaf */
+function prune(node, depth, maxDepth) {
+  const copy = { name: node.name, desc: node.desc, src: node, slot: node.slot };
+  if (node.children && depth < maxDepth) {
+    copy.children = node.children.map(c => prune(c, depth + 1, maxDepth));
+  } else {
+    copy.value = node.total;
+  }
+  return copy;
+}
+
+function layout(viewNode) {
+  const maxDepth = viewNode.home ? 1 : 2;   // home: single hero tile only
+  const root = d3.hierarchy(prune(viewNode, 0, maxDepth))
+    .sum(d => d.value || 0)
+    .sort((a, b) => b.value - a.value);
+  d3.treemap()
+    .size([W, H])
+    .paddingOuter(4)
+    .paddingTop(d => d.depth === 1 && d.children ? 30 : 4)
+    .paddingInner(5)
+    .round(true)(root);
+  return root;
+}
+
+function fillFor(d) {
+  const pct = d.data.src.home ? 0 : (d.children ? 16 : (d.depth === 1 ? 30 : 38));
+  return `color-mix(in oklab, var(--s${d.data.slot % 6}) ${pct}%, var(--surface-1))`;
+}
+
+/* ---------------- render ---------------- */
+function render(direction, originRect) {
+  measure();
+  const view = stack[stack.length - 1];
+  const root = layout(view);
+  const oldG = svg.select("g.view");
+  const g = svg.append("g").attr("class", "view");
+
+  const nodes = root.descendants().filter(d => d.depth > 0);
+
+  const tile = g.selectAll("g.tile")
+    .data(nodes)
+    .join("g")
+    .attr("class", "tile")
+    .attr("transform", d => `translate(${d.x0},${d.y0})`);
+
+  tile.append("rect")
+    .attr("width", d => Math.max(0, d.x1 - d.x0))
+    .attr("height", d => Math.max(0, d.y1 - d.y0))
+    .attr("rx", 5)
+    .attr("fill", fillFor)
+    .on("click", (ev, d) => onTileClick(ev, d));
+
+  tile.append("foreignObject")
+    .attr("width", d => Math.max(0, d.x1 - d.x0))
+    .attr("height", d => d.children ? 28 : Math.max(0, d.y1 - d.y0))
+    .append("xhtml:div")
+    .attr("class", d => "tlabel" + (view.home ? " hero" : ""))
+    .html(d => tileLabel(d, view));
+
+  /* zoom transition */
+  if (oldG.node()) {
+    if (direction === "down" && originRect) {
+      const { x0, y0, x1, y1 } = originRect;
+      g.attr("transform",
+        `translate(${x0},${y0}) scale(${(x1 - x0) / W},${(y1 - y0) / H})`);
+      g.transition().duration(420).ease(d3.easeCubicOut)
+        .attr("transform", "translate(0,0) scale(1)");
+      oldG.transition().duration(300).style("opacity", 0).remove();
+    } else if (direction === "up") {
+      // find where the previous view now lives, shrink old view into it
+      const prevName = originRect;   // here originRect carries the node name path
+      const target = nodes.find(d => d.data.src.path.join("/") === prevName);
+      g.style("opacity", 0).transition().duration(300).style("opacity", 1);
+      if (target) {
+        oldG.raise().transition().duration(420).ease(d3.easeCubicOut)
+          .attr("transform",
+            `translate(${target.x0},${target.y0}) scale(${(target.x1 - target.x0) / W},${(target.y1 - target.y0) / H})`)
+          .style("opacity", 0).remove();
+      } else {
+        oldG.transition().duration(250).style("opacity", 0).remove();
+      }
+    } else {
+      oldG.remove();
+    }
+  }
+
+  renderCrumbs();
+}
+
+function tileLabel(d, view) {
+  const n = d.data.src;
+  const w = d.x1 - d.x0, h = d.y1 - d.y0;
+  if (view.home) {
+    return `<span class="nm">${n.name}</span>` +
+           `<span class="ds">${n.desc}</span>` +
+           `<span class="ds">${n.children.length} components. Click to explore.</span>`;
+  }
+  if (d.children) {
+    return `<span class="nm">${n.name} <span class="ct">(${n.children.length})</span></span>`;
+  }
+  let out = `<span class="nm">${n.name}${n.children ? ` <span class="ct">(${n.children.length})</span>` : ""}</span>`;
+  if (h > 64 && w > 130 && n.desc) {
+    const lines = Math.max(1, Math.floor((h - 44) / 14));
+    out += `<span class="ds" style="display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:${lines};overflow:hidden">${n.desc}</span>`;
+  }
+  return out;
+}
+
+function onTileClick(ev, d) {
+  const src = d.data.src;
+  if (src.children) {
+    closeDrawer();
+    stack.push(src);
+    render("down", { x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 });
+    syncHash();
+  } else {
+    openDrawer(src);
+  }
+}
+
+/* deep-linking: #Runtime or #Memory/Long-term%20memory reopens that view */
+function syncHash() {
+  const cur = stack[stack.length - 1];
+  history.replaceState(null, "", cur.home ? "#" : "#" + cur.path.map(encodeURIComponent).join("/"));
+}
+function openFromHash() {
+  const parts = location.hash.replace(/^#/, "").split("/").filter(Boolean).map(decodeURIComponent);
+  if (!parts.length) return;
+  if (parts[0] === DATA.name) parts.shift();
+  let node = DATA;
+  stack = [HOME, DATA];
+  for (const p of parts) {
+    const next = (node.children || []).find(c => c.name === p);
+    if (!next || !next.children) break;
+    stack.push(next);
+    node = next;
+  }
+  render("none");
+}
+
+/* ---------------- drawer / crumbs ---------------- */
+const panelEl = document.getElementById("panel");
+const scrimEl = document.getElementById("scrim");
+
+function openDrawer(n) {
+  const sw = `<span class="swatch" style="background:color-mix(in oklab, var(--s${n.slot % 6}) 60%, var(--surface-1))"></span>`;
+  let html = `<h2>${sw}${n.name}</h2>`;
+  html += `<div class="path">${n.path.join(" / ")}</div>`;
+  html += `<div class="desc">${n.desc || ""}</div>`;
+  if (n.children) {
+    html += `<ul>` + n.children.map(c => `<li><b>${c.name}</b>: ${c.desc || ""}</li>`).join("") + `</ul>`;
+  }
+  document.getElementById("panelContent").innerHTML = html;
+  panelEl.classList.add("open");
+  panelEl.setAttribute("aria-hidden", "false");
+  scrimEl.classList.add("open");
+}
+
+function closeDrawer() {
+  panelEl.classList.remove("open");
+  panelEl.setAttribute("aria-hidden", "true");
+  scrimEl.classList.remove("open");
+}
+document.getElementById("panelClose").onclick = closeDrawer;
+scrimEl.onclick = closeDrawer;
+
+function renderCrumbs() {
+  const el = document.getElementById("crumbs");
+  el.innerHTML = "";
+  const back = document.createElement("button");
+  back.id = "backBtn"; back.textContent = "← Back";
+  back.disabled = stack.length <= 1;
+  back.onclick = goUp;
+  el.appendChild(back);
+  stack.forEach((n, i) => {
+    if (i > 0) {
+      const s = document.createElement("span");
+      s.className = "sep"; s.textContent = "/";
+      el.appendChild(s);
+    }
+    const b = document.createElement("button");
+    b.className = "crumb" + (i === stack.length - 1 ? " current" : "");
+    b.textContent = n.home ? "Home" : n.name;
+    b.onclick = () => {
+      if (i === stack.length - 1) return;
+      const prev = stack[stack.length - 1];
+      stack = stack.slice(0, i + 1);
+      closeDrawer();
+      render("up", prev.path.join("/"));
+      syncHash();
+    };
+    el.appendChild(b);
+  });
+}
+
+function goUp() {
+  if (stack.length <= 1) return;
+  const prev = stack.pop();
+  closeDrawer();
+  render("up", prev.path.join("/"));
+  syncHash();
+}
+
+/* ---------------- search ---------------- */
+const ALL = [];
+(function flat(n) { ALL.push(n); (n.children || []).forEach(flat); })(DATA);
+
+const sInput = document.getElementById("searchInput");
+const sResults = document.getElementById("searchResults");
+let sItems = [], sActive = -1;
+
+function doSearch(qRaw) {
+  const q = qRaw.trim().toLowerCase();
+  if (!q) { closeSearch(); return; }
+  const starts = [], contains = [], inDesc = [];
+  for (const n of ALL) {
+    const nm = n.name.toLowerCase();
+    if (nm.startsWith(q)) starts.push(n);
+    else if (nm.includes(q)) contains.push(n);
+    else if ((n.desc || "").toLowerCase().includes(q)) inDesc.push(n);
+  }
+  sItems = starts.concat(contains, inDesc).slice(0, 8);
+  sActive = sItems.length ? 0 : -1;
+  renderResults();
+}
+
+function renderResults() {
+  sResults.innerHTML = "";
+  if (!sItems.length) {
+    sResults.innerHTML = `<div class="noRes">No matches</div>`;
+  } else {
+    sItems.forEach((n, i) => {
+      const b = document.createElement("button");
+      b.className = "sItem" + (i === sActive ? " active" : "");
+      b.innerHTML = `<span class="rn">${n.name}</span><span class="rp">${n.path.join(" / ")}</span>`;
+      b.onmousedown = e => { e.preventDefault(); pick(n); };
+      b.onmouseenter = () => { sActive = i; renderResults(); };
+      sResults.appendChild(b);
+    });
+  }
+  sResults.style.display = "block";
+}
+
+function pick(n) {
+  closeSearch();
+  sInput.value = "";
+  sInput.blur();
+  navigateTo(n);
+}
+
+function closeSearch() { sResults.style.display = "none"; sItems = []; sActive = -1; }
+
+function navigateTo(n) {
+  const viewPath = n.children ? n.path : n.path.slice(0, -1);
+  stack = [HOME, DATA];
+  let node = DATA;
+  for (const p of viewPath.slice(1)) {
+    node = node.children.find(c => c.name === p);
+    stack.push(node);
+  }
+  render("none");
+  syncHash();
+  if (!n.children) { flashTile(n); openDrawer(n); }
+  else closeDrawer();
+}
+
+function flashTile(n) {
+  svg.select("g.view").selectAll("g.tile")
+    .filter(d => d.data.src === n)
+    .select("rect")
+    .classed("flash", true);
+  setTimeout(() => svg.selectAll("rect.flash").classed("flash", false), 3000);
+}
+
+sInput.addEventListener("input", () => doSearch(sInput.value));
+sInput.addEventListener("keydown", e => {
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    if (!sItems.length) return;
+    sActive = (sActive + (e.key === "ArrowDown" ? 1 : sItems.length - 1)) % sItems.length;
+    renderResults();
+  } else if (e.key === "Enter") {
+    if (sActive >= 0 && sItems[sActive]) pick(sItems[sActive]);
+  } else if (e.key === "Escape") {
+    e.stopPropagation();
+    closeSearch();
+    sInput.blur();
+  }
+});
+sInput.addEventListener("blur", () => setTimeout(closeSearch, 120));
+
+document.addEventListener("keydown", e => {
+  if (e.target.tagName === "INPUT") return;
+  if (e.key === "/") { e.preventDefault(); sInput.focus(); return; }
+  if (e.key === "Escape" || e.key === "Backspace") {
+    e.preventDefault();
+    if (panelEl.classList.contains("open")) closeDrawer();
+    else goUp();
+  }
+});
+window.addEventListener("resize", () => render("none"));
+
+render("none");
+openFromHash();
+</script>
+</body>
+</html>

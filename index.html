@@ -109,6 +109,17 @@
   .cbadge text { fill: var(--surface-1); font-size: 10px; font-weight: 700;
                  text-anchor: middle; dominant-baseline: central; }
   .cmt { border-top: 1px solid var(--hairline); padding: 8px 0; }
+  .cmt .cact { float: right; display: inline-flex; gap: 2px; }
+  .cbtn {
+    border: none; background: none; color: var(--ink-3); font: inherit;
+    font-size: 11px; cursor: pointer; padding: 2px 6px; border-radius: 4px;
+  }
+  .cbtn:hover { background: var(--grid); color: var(--ink-1); }
+  .ceditTa {
+    width: 100%; font: inherit; font-size: 13px; background: var(--page);
+    color: var(--ink-1); border: 1px solid var(--hairline); border-radius: 6px;
+    padding: 8px; min-height: 60px; resize: vertical; margin-top: 4px;
+  }
   .cmt .ca { font-weight: 650; font-size: 12px; }
   .cmt .ct2 { color: var(--ink-3); font-size: 10px; margin-left: 6px; }
   .cmt .cb { color: var(--ink-2); margin-top: 2px; white-space: pre-wrap; }
@@ -252,13 +263,26 @@ async function loadTopics() {
 let DATA = null;
 
 /* ---------------- comments ---------------- */
-let COMMENTS = {};   // node_path -> [{author, body, created_at}]
+let COMMENTS = {};   // node_path -> [{id, author, body, created_at}]
 let commentMode = false;
 const pathKey = n => n.path.join("/");
 
+/* per-browser identity: lets you edit/delete only your own comments (enforced by RLS) */
+const CLIENT_ID = (() => {
+  let v = localStorage.getItem("dd_client_id");
+  if (!v) { v = crypto.randomUUID(); localStorage.setItem("dd_client_id", v); }
+  return v;
+})();
+const myComments = new Set(JSON.parse(localStorage.getItem("dd_my_comments") || "[]"));
+function rememberMine(id) {
+  myComments.add(id);
+  localStorage.setItem("dd_my_comments", JSON.stringify([...myComments]));
+}
+const CSEL = "select=id,node_path,author,body,created_at";
+
 async function loadComments() {
   try {
-    const r = await fetch(`${SB_URL}/rest/v1/drilldown_comments?select=node_path,author,body,created_at&order=created_at.asc`, {
+    const r = await fetch(`${SB_URL}/rest/v1/drilldown_comments?${CSEL}&order=created_at.asc`, {
       headers: { apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}` }
     });
     if (!r.ok) throw new Error("HTTP " + r.status);
@@ -537,7 +561,12 @@ function openComments(n) {
   html += `<div class="path">${escapeHtml(n.path.join(" / "))}</div>`;
   html += list.length
     ? list.map(c =>
-        `<div class="cmt"><span class="ca">${escapeHtml(c.author || "anon")}</span>` +
+        `<div class="cmt" data-id="${c.id}">` +
+        (myComments.has(c.id)
+          ? `<span class="cact"><button class="cbtn" data-act="edit">Edit</button>` +
+            `<button class="cbtn" data-act="del">Delete</button></span>`
+          : "") +
+        `<span class="ca">${escapeHtml(c.author || "anon")}</span>` +
         `<span class="ct2">${new Date(c.created_at).toLocaleString()}</span>` +
         `<div class="cb">${escapeHtml(c.body)}</div></div>`).join("")
     : `<div class="desc">No comments yet. Be the first.</div>`;
@@ -550,6 +579,15 @@ function openComments(n) {
   document.getElementById("panelContent").innerHTML = html;
   document.getElementById("cAuthor").value = localStorage.getItem("dd_author") || "";
   document.getElementById("cSubmit").onclick = () => submitComment(n);
+  document.querySelectorAll("#panelContent .cbtn").forEach(b => {
+    b.onclick = () => {
+      const id = b.closest(".cmt").dataset.id;
+      const c = list.find(x => x.id === id);
+      if (!c) return;
+      if (b.dataset.act === "del") deleteComment(n, c);
+      else startEdit(n, c, b.closest(".cmt"));
+    };
+  });
   document.getElementById("cBody").addEventListener("keydown", e => {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") submitComment(n);
     else if (e.key === "Escape") e.target.blur();
@@ -569,22 +607,87 @@ async function submitComment(n) {
   const btn = document.getElementById("cSubmit");
   btn.disabled = true;
   try {
-    const r = await fetch(`${SB_URL}/rest/v1/drilldown_comments`, {
+    const r = await fetch(`${SB_URL}/rest/v1/drilldown_comments?${CSEL}`, {
       method: "POST",
       headers: {
         apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}`,
         "Content-Type": "application/json", Prefer: "return=representation"
       },
-      body: JSON.stringify({ node_path: pathKey(n), author: author || null, body })
+      body: JSON.stringify({ node_path: pathKey(n), author: author || null, body, client_id: CLIENT_ID })
     });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const [row] = await r.json();
+    rememberMine(row.id);
     (COMMENTS[pathKey(n)] ||= []).push(row);
     render("none");        // refresh badges
     openComments(n);       // refresh thread
   } catch (e) {
     err.textContent = "Failed to save: " + e.message;
     btn.disabled = false;
+  }
+}
+
+function startEdit(n, c, cmtEl) {
+  const cb = cmtEl.querySelector(".cb");
+  cb.innerHTML = "";
+  const ta = document.createElement("textarea");
+  ta.className = "ceditTa"; ta.maxLength = 2000; ta.value = c.body;
+  const row = document.createElement("div");
+  const save = document.createElement("button");
+  save.className = "cbtn"; save.textContent = "Save";
+  const cancel = document.createElement("button");
+  cancel.className = "cbtn"; cancel.textContent = "Cancel";
+  row.append(save, cancel);
+  cb.append(ta, row);
+  ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
+  cancel.onclick = () => openComments(n);
+  save.onclick = async () => {
+    const body = ta.value.trim();
+    if (!body) return;
+    save.disabled = true;
+    try {
+      const r = await fetch(`${SB_URL}/rest/v1/drilldown_comments?id=eq.${c.id}&${CSEL}`, {
+        method: "PATCH",
+        headers: {
+          apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}`,
+          "Content-Type": "application/json", "x-client-id": CLIENT_ID,
+          Prefer: "return=representation"
+        },
+        body: JSON.stringify({ body })
+      });
+      const rows = await r.json();
+      if (!r.ok || !rows.length) throw new Error(rows.length === 0 ? "not allowed" : "HTTP " + r.status);
+      c.body = rows[0].body;
+      openComments(n);
+    } catch (e) {
+      save.disabled = false;
+      save.textContent = "Failed";
+      setTimeout(() => { save.textContent = "Save"; }, 1500);
+    }
+  };
+}
+
+async function deleteComment(n, c) {
+  if (!confirm("Delete this comment?")) return;
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/drilldown_comments?id=eq.${c.id}&${CSEL}`, {
+      method: "DELETE",
+      headers: {
+        apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}`,
+        "x-client-id": CLIENT_ID, Prefer: "return=representation"
+      }
+    });
+    const rows = await r.json();
+    if (!r.ok || !rows.length) throw new Error("not allowed");
+    const k = pathKey(n);
+    COMMENTS[k] = (COMMENTS[k] || []).filter(x => x.id !== c.id);
+    if (!COMMENTS[k].length) delete COMMENTS[k];
+    myComments.delete(c.id);
+    localStorage.setItem("dd_my_comments", JSON.stringify([...myComments]));
+    render("none");        // refresh badges
+    openComments(n);
+  } catch (e) {
+    alert("Delete failed: " + e.message);
   }
 }
 

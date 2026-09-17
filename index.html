@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AWS Bedrock AgentCore: Interactive Component Map</title>
+<title>Drilldown: Interactive Topic Explorer</title>
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
 <style>
   :root {
@@ -169,8 +169,8 @@
 </head>
 <body>
 <header>
-  <h1>AWS Bedrock AgentCore: Component Map</h1>
-  <p>Click a tile to drill into it. Click a leaf for details. Esc or Back moves up one level.</p>
+  <h1>Drilldown: Interactive Topic Explorer</h1>
+  <p>Pick a topic, then click tiles to drill deeper. Click a leaf for details. Esc or Back moves up one level.</p>
 </header>
 
 <div id="topbar">
@@ -193,7 +193,7 @@
 
 <script>
 /* ---------------- data ---------------- */
-const DATA = {
+const AGENTCORE = {
   name: "AWS AgentCore",
   desc: "Amazon Bedrock AgentCore: managed services to deploy and operate AI agents securely at scale, with any framework and any model.",
   children: [
@@ -263,23 +263,53 @@ const DATA = {
   ]
 };
 
-/* assign each node its top-level branch slot + leaf weight sums */
-function annotate(node, slot, path) {
+const MCP = {
+  name: "Model Context Protocol",
+  desc: "MCP: the open standard that connects AI agents to tools and data. Example second topic; any hierarchy can live here.",
+  children: [
+    { name: "Architecture", desc: "How hosts, clients, and servers fit together.",
+      children: [
+        { name: "Host", w: 2, desc: "The AI application (IDE, chat app, agent runtime) that embeds one or more MCP clients." },
+        { name: "Client", w: 1, desc: "Maintains a 1:1 connection with a server and relays requests for the host." },
+        { name: "Server", w: 2, desc: "Exposes tools, resources, and prompts over the protocol. One server per integration." }
+      ]},
+    { name: "Primitives", desc: "What a server can offer.",
+      children: [
+        { name: "Tools", w: 2, desc: "Model-invoked functions with JSON Schema inputs; the agent decides when to call them." },
+        { name: "Resources", w: 1, desc: "Application-controlled data (files, records) the host can read into context." },
+        { name: "Prompts", w: 1, desc: "User-invoked templates that servers expose for common workflows." }
+      ]},
+    { name: "Transports", desc: "How messages move.",
+      children: [
+        { name: "stdio", w: 1, desc: "Local servers spawned as subprocesses; JSON-RPC over stdin/stdout." },
+        { name: "Streamable HTTP", w: 1, desc: "Remote servers over HTTP with streaming responses; supports auth via OAuth." }
+      ]}
+  ]
+};
+
+const DATA = {
+  name: "Topics",
+  desc: "",
+  home: true,
+  children: [AGENTCORE, MCP]
+};
+
+/* slots: each topic and each component inside a topic gets its own hue; deeper levels inherit */
+function annotate(node, slot, path, depth) {
   node.slot = slot;
-  node.path = path.concat(node.name);
+  node.path = path;
   if (node.children) {
-    node.children.forEach((c, i) => annotate(c, slot === null ? i : slot, node.path));
+    node.children.forEach((c, i) =>
+      annotate(c, depth < 2 ? i : slot, path.concat(c.name), depth + 1));
     node.total = node.children.reduce((s, c) => s + c.total, 0);
   } else {
     node.total = node.w || 1;
   }
 }
-annotate(DATA, null, []);
-DATA.slot = 0;
+annotate(DATA, 0, [], 0);
 
 /* ---------------- state ---------------- */
-const HOME = { name: "Home", desc: "", children: [DATA], slot: 0, path: [], total: DATA.total, home: true };
-let stack = [HOME];                 // navigation stack, last = current view
+let stack = [DATA];                 // navigation stack, last = current view
 
 const svg = d3.select("#chart");
 let W = 900, H = 560;
@@ -292,19 +322,19 @@ function measure() {
 }
 
 /* prune a subtree to a max depth; deeper content collapses into a sized leaf */
-function prune(node, depth, maxDepth) {
+function prune(node, depth, maxDepth, equal) {
   const copy = { name: node.name, desc: node.desc, src: node, slot: node.slot };
   if (node.children && depth < maxDepth) {
-    copy.children = node.children.map(c => prune(c, depth + 1, maxDepth));
+    copy.children = node.children.map(c => prune(c, depth + 1, maxDepth, equal));
   } else {
-    copy.value = node.total;
+    copy.value = equal ? 1 : node.total;
   }
   return copy;
 }
 
 function layout(viewNode) {
-  const maxDepth = viewNode.home ? 1 : 2;   // home: single hero tile only
-  const root = d3.hierarchy(prune(viewNode, 0, maxDepth))
+  const maxDepth = viewNode.home ? 1 : 2;   // home: one equal-sized tile per topic
+  const root = d3.hierarchy(prune(viewNode, 0, maxDepth, viewNode.home))
     .sum(d => d.value || 0)
     .sort((a, b) => b.value - a.value);
   d3.treemap()
@@ -420,9 +450,8 @@ function syncHash() {
 function openFromHash() {
   const parts = location.hash.replace(/^#/, "").split("/").filter(Boolean).map(decodeURIComponent);
   if (!parts.length) return;
-  if (parts[0] === DATA.name) parts.shift();
   let node = DATA;
-  stack = [HOME, DATA];
+  stack = [DATA];
   for (const p of parts) {
     const next = (node.children || []).find(c => c.name === p);
     if (!next || !next.children) break;
@@ -497,7 +526,7 @@ function goUp() {
 
 /* ---------------- search ---------------- */
 const ALL = [];
-(function flat(n) { ALL.push(n); (n.children || []).forEach(flat); })(DATA);
+(function flat(n) { if (n !== DATA) ALL.push(n); (n.children || []).forEach(flat); })(DATA);
 
 const sInput = document.getElementById("searchInput");
 const sResults = document.getElementById("searchResults");
@@ -546,9 +575,9 @@ function closeSearch() { sResults.style.display = "none"; sItems = []; sActive =
 
 function navigateTo(n) {
   const viewPath = n.children ? n.path : n.path.slice(0, -1);
-  stack = [HOME, DATA];
+  stack = [DATA];
   let node = DATA;
-  for (const p of viewPath.slice(1)) {
+  for (const p of viewPath) {
     node = node.children.find(c => c.name === p);
     stack.push(node);
   }

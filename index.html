@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Drilldown: Interactive Topic Explorer</title>
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="topics.js"></script>
 <style>
   :root {
     --surface-1: #fcfcfb;
@@ -193,106 +194,26 @@
 
 <script>
 /* ---------------- data ---------------- */
-const AGENTCORE = {
-  name: "AWS AgentCore",
-  desc: "Amazon Bedrock AgentCore: managed services to deploy and operate AI agents securely at scale, with any framework and any model.",
-  children: [
-    { name: "Runtime", desc: "Serverless, secure hosting for agents built with any framework.",
-      children: [
-        { name: "Serverless hosting", w: 3, desc: "Deploy agent code without managing servers or clusters. Package the agent, AgentCore provisions and scales it." },
-        { name: "Session isolation", w: 3, desc: "Each user session runs in its own dedicated microVM, so state and data never leak across sessions." },
-        { name: "Long-running sessions", w: 2, desc: "Sessions can run up to 8 hours, supporting asynchronous and multi-step agent workloads." },
-        { name: "Any framework", w: 2, desc: "Works with LangGraph, CrewAI, Strands Agents, or fully custom code. No SDK lock-in." },
-        { name: "Protocols and streaming", w: 2, desc: "Exposes HTTP and MCP endpoints and streams partial responses back to callers." }
-      ]},
-    { name: "Gateway", desc: "Turns existing APIs and Lambda functions into agent-ready MCP tools.",
-      children: [
-        { name: "Tool targets", desc: "Sources that Gateway converts into tools.",
-          children: [
-            { name: "Lambda functions", w: 2, desc: "Wrap existing AWS Lambda functions as MCP tools with no code changes." },
-            { name: "OpenAPI specs", w: 2, desc: "Point Gateway at an OpenAPI definition and every operation becomes a callable tool." },
-            { name: "Smithy models", w: 1, desc: "AWS Smithy service models can also be registered as tool targets." }
-          ]},
-        { name: "Managed MCP server", w: 2, desc: "Gateway exposes one managed MCP endpoint that agents connect to for all registered tools." },
-        { name: "Semantic tool search", w: 2, desc: "Agents can search across thousands of tools semantically and pull in only the relevant ones, keeping context small." },
-        { name: "Auth passthrough", w: 1, desc: "Integrates with AgentCore Identity so each tool call carries the right credentials." }
-      ]},
-    { name: "Memory", desc: "Managed short-term and long-term memory so agents remember context.",
-      children: [
-        { name: "Short-term memory", w: 3, desc: "Raw event storage per session: turns, tool calls, and checkpoints available for the active conversation." },
-        { name: "Long-term memory", desc: "Extracted knowledge that persists across sessions.",
-          children: [
-            { name: "Semantic strategy", w: 2, desc: "Extracts durable facts from conversations and stores them as retrievable memories." },
-            { name: "Summarization strategy", w: 2, desc: "Maintains rolling summaries of sessions so agents can resume with compact context." },
-            { name: "User preference strategy", w: 2, desc: "Learns per-user preferences (tone, formats, choices) and applies them in later sessions." },
-            { name: "Namespaces", w: 1, desc: "Scopes memories per actor, session, or application so retrieval stays tenant-safe." }
-          ]}
-      ]},
-    { name: "Identity", desc: "Secure identity and access for agents acting on behalf of users.",
-      children: [
-        { name: "Inbound auth", w: 2, desc: "Controls who may invoke the agent: IAM SigV4 or OAuth JWT bearer tokens validated at the door." },
-        { name: "Outbound auth", desc: "How the agent authenticates to downstream services.",
-          children: [
-            { name: "OAuth 2.0 flows", w: 2, desc: "Supports 2-legged (machine) and 3-legged (user consent) OAuth so agents act with delegated permissions." },
-            { name: "API keys", w: 1, desc: "Stores provider API keys and injects them into tool calls without exposing them to the model." }
-          ]},
-        { name: "Token vault", w: 2, desc: "Encrypted storage for tokens and secrets, with automatic refresh handling." },
-        { name: "Credential providers", w: 2, desc: "Prebuilt connectors for Google, GitHub, Slack, Salesforce, Atlassian, and custom OAuth providers." }
-      ]},
-    { name: "Built-in Tools", desc: "Managed tools agents can use out of the box.",
-      children: [
-        { name: "Code Interpreter", desc: "Sandboxed code execution for analysis and computation.",
-          children: [
-            { name: "Sandboxed execution", w: 2, desc: "Runs Python, JavaScript, or TypeScript in an isolated sandbox with no network by default." },
-            { name: "Session file I/O", w: 1, desc: "Upload data files, run code against them, and read generated artifacts back within the session." }
-          ]},
-        { name: "Browser", desc: "A managed cloud browser for web tasks.",
-          children: [
-            { name: "Cloud browser sessions", w: 2, desc: "Fast, isolated headless browser sessions managed by AWS, no fleet to run." },
-            { name: "CDP and Playwright", w: 1, desc: "Automate via Chrome DevTools Protocol or Playwright from the agent." },
-            { name: "Live view and replay", w: 1, desc: "Watch a live view of what the agent does in the browser and replay sessions for audit." }
-          ]}
-      ]},
-    { name: "Observability", desc: "Tracing, metrics, and debugging for agents in production.",
-      children: [
-        { name: "CloudWatch GenAI dashboards", w: 2, desc: "Prebuilt dashboards for agent health: invocations, latency, token usage, and error rates." },
-        { name: "OTEL traces and spans", w: 2, desc: "OpenTelemetry-compatible traces covering each step: model calls, tool calls, memory reads." },
-        { name: "Trajectory inspection", w: 2, desc: "Step through an agent session end to end to debug why it took a given path." },
-        { name: "Alerts and metrics", w: 1, desc: "Standard CloudWatch metrics and alarms on top of agent telemetry." }
-      ]}
-  ]
-};
+/* Topics load from Supabase (drilldown_topics, anon read-only via RLS);
+   topics.js is the embedded fallback when offline or if the fetch fails. */
+const SB_URL = "https://qsjrdhlaylhdnxkbbbof.supabase.co";
+const SB_ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFzanJkaGxheWxoZG54a2JiYm9mIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ4OTk4ODMsImV4cCI6MjA3MDQ3NTg4M30.djHovL_x7BIj-1CH5t5qdYh2uJxB5lWLzZcFKrSlCdM";
 
-const MCP = {
-  name: "Model Context Protocol",
-  desc: "MCP: the open standard that connects AI agents to tools and data. Example second topic; any hierarchy can live here.",
-  children: [
-    { name: "Architecture", desc: "How hosts, clients, and servers fit together.",
-      children: [
-        { name: "Host", w: 2, desc: "The AI application (IDE, chat app, agent runtime) that embeds one or more MCP clients." },
-        { name: "Client", w: 1, desc: "Maintains a 1:1 connection with a server and relays requests for the host." },
-        { name: "Server", w: 2, desc: "Exposes tools, resources, and prompts over the protocol. One server per integration." }
-      ]},
-    { name: "Primitives", desc: "What a server can offer.",
-      children: [
-        { name: "Tools", w: 2, desc: "Model-invoked functions with JSON Schema inputs; the agent decides when to call them." },
-        { name: "Resources", w: 1, desc: "Application-controlled data (files, records) the host can read into context." },
-        { name: "Prompts", w: 1, desc: "User-invoked templates that servers expose for common workflows." }
-      ]},
-    { name: "Transports", desc: "How messages move.",
-      children: [
-        { name: "stdio", w: 1, desc: "Local servers spawned as subprocesses; JSON-RPC over stdin/stdout." },
-        { name: "Streamable HTTP", w: 1, desc: "Remote servers over HTTP with streaming responses; supports auth via OAuth." }
-      ]}
-  ]
-};
+async function loadTopics() {
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/drilldown_topics?select=data&order=position.asc`, {
+      headers: { apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}` }
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const rows = await r.json();
+    if (rows.length) return rows.map(x => x.data);
+  } catch (e) {
+    console.warn("Supabase fetch failed, using embedded topics:", e);
+  }
+  return window.TOPICS;
+}
 
-const DATA = {
-  name: "Topics",
-  desc: "",
-  home: true,
-  children: [AGENTCORE, MCP]
-};
+let DATA = null;
 
 /* slots: each topic and each component inside a topic gets its own hue; deeper levels inherit */
 function annotate(node, slot, path, depth) {
@@ -306,10 +227,9 @@ function annotate(node, slot, path, depth) {
     node.total = 1;   // equal weight per leaf; keeps siblings readable, no slivers
   }
 }
-annotate(DATA, 0, [], 0);
 
 /* ---------------- state ---------------- */
-let stack = [DATA];                 // navigation stack, last = current view
+let stack = [];                 // navigation stack, last = current view
 
 const svg = d3.select("#chart");
 let W = 900, H = 560;
@@ -355,6 +275,7 @@ function fillFor(d) {
 
 /* ---------------- render ---------------- */
 function render(direction, originRect) {
+  if (!DATA) return;
   measure();
   const view = stack[stack.length - 1];
   const root = layout(view);
@@ -528,7 +449,10 @@ function goUp() {
 
 /* ---------------- search ---------------- */
 const ALL = [];
-(function flat(n) { if (n !== DATA) ALL.push(n); (n.children || []).forEach(flat); })(DATA);
+function buildSearchIndex() {
+  ALL.length = 0;
+  (function flat(n) { if (n !== DATA) ALL.push(n); (n.children || []).forEach(flat); })(DATA);
+}
 
 const sInput = document.getElementById("searchInput");
 const sResults = document.getElementById("searchResults");
@@ -625,8 +549,15 @@ document.addEventListener("keydown", e => {
 });
 window.addEventListener("resize", () => render("none"));
 
-render("none");
-openFromHash();
+(async function init() {
+  const topics = await loadTopics();
+  DATA = { name: "Topics", desc: "", home: true, children: topics };
+  annotate(DATA, 0, [], 0);
+  stack = [DATA];
+  buildSearchIndex();
+  render("none");
+  openFromHash();
+})();
 </script>
 </body>
 </html>

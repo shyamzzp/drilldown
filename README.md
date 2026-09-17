@@ -15,8 +15,16 @@ Interactive, zoomable drill-down treemap for exploring any nested topic, built w
 
 ## Run locally
 
-Open `index.html` in a browser. Needs internet for the d3 CDN.
+Open `index.html` in a browser. Needs internet for the d3 CDN and the Supabase fetch.
 
-## Swap or add topics
+## Data
 
-All content lives in the `DATA` object at the top of the script in `index.html`: plain nested `{ name, desc, children | w }`. Replace it with any topic hierarchy and refresh; the treemap, search, drawer, and deep links adapt automatically.
+Topics load at runtime from Supabase (table `drilldown_topics`, project `qsjrdhlaylhdnxkbbbof`), read-only for the anon key via RLS. `topics.js` holds the same hierarchies as an embedded fallback used when the fetch fails.
+
+To add or edit topics:
+
+1. Edit `topics.js` (plain nested `{ name, desc, children }` objects)
+2. Run `node scripts/seed.cjs` to upsert them into Supabase (needs a local `.env` with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`; not committed)
+3. Commit and push so the fallback stays in sync
+
+Content-only changes take effect via the seed alone; no redeploy needed.

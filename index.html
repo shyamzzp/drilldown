@@ -111,10 +111,10 @@
   .dbadge { cursor: pointer; opacity: 0; transition: opacity .15s; }
   .tile:hover .dbadge { opacity: 1; }
   .dbadge circle { fill: var(--surface-1); stroke: var(--hairline); }
-  .dbadge text { fill: var(--ink-2); font-size: 12px; font-weight: 700;
-                 text-anchor: middle; dominant-baseline: central; }
+  .dbadge path { fill: none; stroke: var(--ink-2); stroke-width: 1.1;
+                 stroke-linecap: round; stroke-linejoin: round; }
   .dbadge:hover circle { fill: #d03b3b; }
-  .dbadge:hover text { fill: #ffffff; }
+  .dbadge:hover path { stroke: #ffffff; }
   #addTile {
     border: 1px solid var(--hairline); background: var(--surface-1);
     color: var(--ink-1); font: inherit; font-size: 13px; flex: 0 0 auto;
@@ -501,7 +501,11 @@ function render(direction, originRect) {
     .attr("transform", d => `translate(${Math.max(16, d.x1 - d.x0 - 16)},15)`)
     .on("click", (ev, d) => { ev.stopPropagation(); deleteTile(d.data.src); });
   del.append("circle").attr("r", 9);
-  del.append("text").text("×");
+  del.append("path")   // trash-can icon, drawn centered on (0,0)
+    .attr("d", "M-4.5 -3.5 H4.5 M-1.5 -3.5 V-4.5 a1 1 0 0 1 1 -1 h1 a1 1 0 0 1 1 1 V-3.5 " +
+               "M-3.5 -3.5 L-3 4.5 a1 1 0 0 0 1 1 h4 a1 1 0 0 0 1 -1 L3.5 -3.5 " +
+               "M-0.8 -1.5 V3 M1.8 -1.5 V3")
+    .attr("transform", "translate(-0.6,0)");
   del.append("title").text("Delete tile");
 
   /* zoom transition */

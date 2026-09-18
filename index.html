@@ -122,6 +122,19 @@
   }
   #addTile:disabled { opacity: .4; cursor: default; }
   #addTile:not(:disabled):hover { background: var(--grid); }
+  .teName, .teDesc {
+    width: 100%; font: inherit; background: var(--surface-1); color: var(--ink-1);
+    border: 1px solid var(--ink-3); border-radius: 4px; padding: 4px 6px;
+    margin-bottom: 4px; display: block;
+  }
+  .teName { font-size: 12px; font-weight: 650; }
+  .teDesc { font-size: 11px; min-height: 44px; resize: none; }
+  .teRow button {
+    font: inherit; font-size: 11px; border: none; border-radius: 4px;
+    padding: 3px 10px; margin-right: 4px; cursor: pointer;
+    background: var(--ink-1); color: var(--surface-1);
+  }
+  .teRow button.teCancel { background: var(--grid); color: var(--ink-1); }
   .cmt { border-top: 1px solid var(--hairline); padding: 8px 0; }
   .cmt .cact { float: right; display: inline-flex; gap: 2px; }
   .cbtn {
@@ -306,6 +319,29 @@ async function loadDeleted() {
   } catch (e) { console.warn("tombstones fetch failed:", e); return new Set(); }
 }
 
+async function loadEdits() {
+  try {
+    return await sbGet("drilldown_tile_edits?select=node_path,name,descr&order=updated_at.asc");
+  } catch (e) { console.warn("tile edits fetch failed:", e); return []; }
+}
+
+/* apply rename/desc overrides in chronological order; each edit resolves
+   against the tree as already renamed by earlier edits */
+function applyEdits(rows) {
+  for (const e of rows) {
+    let node = DATA;
+    for (const p of e.node_path.split("/")) {
+      node = (node.children || []).find(c => c.name === p);
+      if (!node) break;
+    }
+    if (node && !node.children) {
+      node.name = e.name;
+      node.desc = e.descr || "";
+      node.edited = true;
+    }
+  }
+}
+
 /* attach user tiles under their parent path, then drop tombstoned subtrees */
 function attachUserTiles(node, path, byParent) {
   const mine = byParent[path.join("/")];
@@ -439,7 +475,11 @@ function render(direction, originRect) {
     .attr("height", d => Math.max(0, d.y1 - d.y0))
     .attr("rx", 5)
     .attr("fill", fillFor)
-    .on("click", (ev, d) => onTileClick(ev, d));
+    .on("click", (ev, d) => onTileClick(ev, d))
+    .on("dblclick", (ev, d) => {
+      clearTimeout(leafClickTimer);
+      startInlineEdit(ev, d);
+    });
 
   tile.append("foreignObject")
     .attr("width", d => Math.max(0, d.x1 - d.x0))
@@ -595,6 +635,69 @@ async function deleteTile(n) {
 }
 document.getElementById("addTile").onclick = openAddForm;
 
+/* ---------------- inline edit (double-click a leaf) ---------------- */
+function startInlineEdit(ev, d) {
+  const n = d.data.src;
+  if (n.children) return;                      // leaves only
+  const origPath = pathKey(n);                 // key BEFORE rename
+  const parent = stack[stack.length - 1];
+  const g = d3.select(ev.currentTarget.parentNode);
+  const fo = g.select("foreignObject")
+    .attr("height", Math.max(0, d.y1 - d.y0))
+    .style("pointer-events", "all");
+  const div = fo.select("div").node();
+  div.innerHTML = `
+    <input class="teName" maxlength="60">
+    <textarea class="teDesc" maxlength="500"></textarea>
+    <div class="teRow"><button class="teSave">Save</button><button class="teCancel">Cancel</button></div>`;
+  const nameEl = div.querySelector(".teName");
+  const descEl = div.querySelector(".teDesc");
+  nameEl.value = n.name;
+  descEl.value = n.desc || "";
+  nameEl.focus(); nameEl.select();
+  div.addEventListener("click", e => e.stopPropagation());
+  div.addEventListener("dblclick", e => e.stopPropagation());
+  const cancel = () => render("none");
+  div.querySelector(".teCancel").onclick = cancel;
+  div.addEventListener("keydown", e => {
+    if (e.key === "Escape") { e.stopPropagation(); cancel(); }
+    if (e.key === "Enter" && e.target === nameEl) { e.preventDefault(); save(); }
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) save();
+  });
+  const save = async () => {
+    const name = nameEl.value.trim();
+    const descr = descEl.value.trim();
+    if (!name) { nameEl.focus(); return; }
+    if (name !== n.name && (parent.children || []).some(c => c !== n && c.name === name)) {
+      nameEl.style.borderColor = "#d03b3b"; nameEl.focus(); return;
+    }
+    div.querySelector(".teSave").disabled = true;
+    try {
+      const r = await fetch(`${SB_URL}/rest/v1/drilldown_tile_edits?on_conflict=node_path`, {
+        method: "POST",
+        headers: {
+          apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}`,
+          "Content-Type": "application/json",
+          Prefer: "resolution=merge-duplicates"
+        },
+        body: JSON.stringify({
+          node_path: origPath, name, descr,
+          client_id: CLIENT_ID, updated_at: new Date().toISOString()
+        })
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      n.name = name; n.desc = descr; n.edited = true;
+      annotate(DATA, 0, [], 0);
+      buildSearchIndex();
+      render("none");
+    } catch (e) {
+      div.querySelector(".teSave").disabled = false;
+      alert("Save failed: " + e.message);
+    }
+  };
+  div.querySelector(".teSave").onclick = save;
+}
+
 /* ---------------- AI expand ---------------- */
 let aiBusy = false, aiPillTimer = null;
 function showAiPill(text, hideMs) {
@@ -641,6 +744,7 @@ async function aiExpand(n) {
   }
 }
 
+let leafClickTimer = null;
 function onTileClick(ev, d) {
   const src = d.data.src;
   if (ev.ctrlKey || ev.metaKey) { aiExpand(src); return; }
@@ -651,7 +755,9 @@ function onTileClick(ev, d) {
     render("down", { x0: d.x0, y0: d.y0, x1: d.x1, y1: d.y1 });
     syncHash();
   } else {
-    openDrawer(src);
+    // small delay so a double-click (inline edit) can cancel the drawer
+    clearTimeout(leafClickTimer);
+    leafClickTimer = setTimeout(() => openDrawer(src), 250);
   }
 }
 
@@ -998,8 +1104,8 @@ document.addEventListener("fullscreenchange", () => render("none"));
 window.addEventListener("resize", () => render("none"));
 
 (async function init() {
-  const [topics, userTiles, deleted] = await Promise.all([
-    loadTopics(), loadUserTiles(), loadDeleted(), loadComments()
+  const [topics, userTiles, deleted, edits] = await Promise.all([
+    loadTopics(), loadUserTiles(), loadDeleted(), loadEdits(), loadComments()
   ]);
   DELETED = deleted;
   DATA = { name: "Topics", desc: "", home: true, children: topics };
@@ -1007,6 +1113,7 @@ window.addEventListener("resize", () => render("none"));
   for (const t of userTiles) (byParent[t.parent_path] ||= []).push(t);
   attachUserTiles(DATA, [], byParent);
   pruneDeleted(DATA, []);
+  applyEdits(edits);
   annotate(DATA, 0, [], 0);
   stack = [DATA];
   buildSearchIndex();

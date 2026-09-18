@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Drilldown: Interactive Topic Explorer</title>
 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <script src="topics.js"></script>
 <style>
   :root {
@@ -235,6 +237,33 @@
   #panel li { margin: 3px 0; }
   #panel .hint { margin-top: 12px; color: var(--ink-3); font-size: 11px; }
   #panel .detail { margin-top: 10px; color: var(--ink-2); line-height: 1.55; }
+  #panel .mdc p { margin: 6px 0; }
+  #panel .mdc h1, #panel .mdc h2, #panel .mdc h3, #panel .mdc h4 {
+    margin: 12px 0 4px; color: var(--ink-1);
+  }
+  #panel .mdc h1 { font-size: 15px; } #panel .mdc h2 { font-size: 14px; }
+  #panel .mdc h3 { font-size: 13px; } #panel .mdc h4 { font-size: 12px; }
+  #panel .mdc ul, #panel .mdc ol { margin: 6px 0; padding-left: 18px; }
+  #panel .mdc li { margin: 2px 0; }
+  #panel .mdc code {
+    background: var(--page); border: 1px solid var(--hairline); border-radius: 4px;
+    padding: 1px 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+  }
+  #panel .mdc pre {
+    background: var(--page); border: 1px solid var(--hairline); border-radius: 6px;
+    padding: 8px 10px; margin: 6px 0; overflow-x: auto;
+  }
+  #panel .mdc pre code { border: none; background: none; padding: 0; }
+  #panel .mdc a { color: var(--s0); }
+  #panel .mdc blockquote {
+    border-left: 3px solid var(--hairline); margin: 6px 0; padding-left: 10px;
+    color: var(--ink-3);
+  }
+  #panel .mdc table { border-collapse: collapse; font-size: 12px; margin: 6px 0; }
+  #panel .mdc th, #panel .mdc td { border: 1px solid var(--hairline); padding: 4px 6px; }
+  #panel .mdc img { max-width: 100%; border-radius: 6px; }
+  #panel .mdc hr { border: none; border-top: 1px solid var(--hairline); margin: 10px 0; }
   #panel .cmdh { margin-top: 14px; margin-bottom: 4px; font-weight: 650; font-size: 12px; }
   #panel pre.cmd {
     background: var(--page); border: 1px solid var(--hairline); border-radius: 6px;
@@ -540,7 +569,7 @@ function tileLabel(d, view) {
   const n = d.data.src;
   const w = d.x1 - d.x0, h = d.y1 - d.y0;
   const nm = (n.ai ? "✨ " : "") + escapeHtml(n.name);
-  const ds = escapeHtml(n.desc || "");
+  const ds = escapeHtml(stripMd(n.desc));
   if (view.home) {
     return `<span class="nm">${nm}</span>` +
            `<span class="ds">${ds}</span>` +
@@ -786,14 +815,14 @@ function openDrawer(n) {
   const sw = `<span class="swatch" style="background:color-mix(in oklab, var(--s${n.slot % 6}) 60%, var(--surface-1))"></span>`;
   let html = `<h2>${sw}${n.ai ? "✨ " : ""}${escapeHtml(n.name)}</h2>`;
   html += `<div class="path">${escapeHtml(n.path.join(" / "))}</div>`;
-  html += `<div class="desc">${escapeHtml(n.desc || "")}</div>`;
-  if (n.detail) html += `<div class="detail">${escapeHtml(n.detail)}</div>`;
+  html += `<div class="desc mdc">${md(n.desc)}</div>`;
+  if (n.detail) html += `<div class="detail mdc">${md(n.detail)}</div>`;
   if (n.commands && n.commands.length) {
     html += `<div class="cmdh">Commands & snippets</div>` +
       n.commands.map(c => `<pre class="cmd"><code>${escapeHtml(c)}</code></pre>`).join("");
   }
   if (n.children) {
-    html += `<ul>` + n.children.map(c => `<li><b>${escapeHtml(c.name)}</b>: ${escapeHtml(c.desc || "")}</li>`).join("") + `</ul>`;
+    html += `<ul>` + n.children.map(c => `<li><b>${escapeHtml(c.name)}</b>: ${escapeHtml(stripMd(c.desc))}</li>`).join("") + `</ul>`;
   }
   document.getElementById("panelContent").innerHTML = html;
   panelEl.classList.add("open");
@@ -812,6 +841,26 @@ scrimEl.onclick = closeDrawer;
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* markdown -> sanitized HTML (drawer); falls back to escaped text if CDN failed */
+function md(text) {
+  if (window.marked && window.DOMPurify) {
+    return DOMPurify.sanitize(marked.parse(String(text || ""), { breaks: true }));
+  }
+  return escapeHtml(String(text || "")).replace(/\n/g, "<br>");
+}
+
+/* markdown -> plain text (tile labels, lists) */
+function stripMd(s) {
+  return String(s || "")
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^\s*[-*+]\s+/gm, "")
+    .replace(/[*_~]/g, "")
+    .replace(/\s+/g, " ").trim();
 }
 
 function openComments(n) {

@@ -374,7 +374,7 @@ function attachUserTiles(node, path, byParent) {
   const mine = byParent[path.join("/")];
   if (mine) {
     node.children = (node.children || []).concat(
-      mine.map(t => ({ name: t.name, desc: t.descr || "", user: true })));
+      mine.map(t => ({ name: t.name, desc: t.descr || "", user: true, children: [] })));
   }
   (node.children || []).forEach(c => attachUserTiles(c, path.concat(c.name), byParent));
 }
@@ -383,7 +383,7 @@ function pruneDeleted(node, path) {
   if (!node.children) return;
   node.children = node.children.filter(c => !DELETED.has(path.concat(c.name).join("/")));
   node.children.forEach(c => pruneDeleted(c, path.concat(c.name)));
-  if (!node.children.length && !node.home) delete node.children;
+  if (!node.children.length && !node.home && !node.user) delete node.children;
 }
 
 /* ---------------- comments ---------------- */
@@ -429,7 +429,7 @@ function annotate(node, slot, path, depth) {
   if (node.children) {
     node.children.forEach((c, i) =>
       annotate(c, depth < 2 ? i : slot, path.concat(c.name), depth + 1));
-    node.total = node.children.reduce((s, c) => s + c.total, 0);
+    node.total = Math.max(1, node.children.reduce((s, c) => s + c.total, 0));
   } else {
     node.total = 1;   // equal weight per leaf; keeps siblings readable, no slivers
   }
@@ -490,6 +490,14 @@ function render(direction, originRect) {
   const g = svg.append("g").attr("class", "view");
 
   const nodes = root.descendants().filter(d => d.depth > 0);
+  if (!nodes.length) {
+    g.append("text")
+      .attr("x", W / 2).attr("y", H / 2)
+      .attr("text-anchor", "middle")
+      .attr("fill", "var(--ink-3)")
+      .style("font-size", "14px")
+      .text("Nothing here yet. Use “+ Add tile”, or Ctrl+click the breadcrumb level to AI-generate content.");
+  }
 
   const tile = g.selectAll("g.tile")
     .data(nodes)
@@ -589,9 +597,8 @@ function tileLabel(d, view) {
 /* ---------------- add / delete tiles ---------------- */
 function openAddForm() {
   const cur = stack[stack.length - 1];
-  if (cur.home) return;
-  let html = `<h2>➕ Add tile</h2>`;
-  html += `<div class="path">under: ${escapeHtml(pathKey(cur))}</div>`;
+  let html = `<h2>➕ Add ${cur.home ? "topic" : "tile"}</h2>`;
+  html += `<div class="path">under: ${cur.home ? "Home" : escapeHtml(pathKey(cur))}</div>`;
   html += `<div id="cform">
     <input id="tName" placeholder="Tile header" maxlength="60">
     <textarea id="tDesc" placeholder="Description..." maxlength="500"></textarea>
@@ -626,7 +633,7 @@ async function saveTile(cur) {
       body: JSON.stringify({ parent_path: pathKey(cur), name, descr, client_id: CLIENT_ID })
     });
     if (!r.ok) throw new Error("HTTP " + r.status);
-    cur.children = (cur.children || []).concat([{ name, desc: descr, user: true }]);
+    cur.children = (cur.children || []).concat([{ name, desc: descr, user: true, children: [] }]);
     annotate(DATA, 0, [], 0);
     buildSearchIndex();
     render("none");
@@ -1007,8 +1014,6 @@ function renderCrumbs() {
   back.disabled = stack.length <= 1;
   back.onclick = goUp;
   el.appendChild(back);
-  const add = document.getElementById("addTile");
-  if (add) add.disabled = stack[stack.length - 1].home;
   stack.forEach((n, i) => {
     if (i > 0) {
       const s = document.createElement("span");
@@ -1018,8 +1023,13 @@ function renderCrumbs() {
     const b = document.createElement("button");
     b.className = "crumb" + (i === stack.length - 1 ? " current" : "");
     b.textContent = n.home ? "Home" : n.name;
-    b.onclick = () => {
-      if (i === stack.length - 1) { if (!n.home) openDrawer(n); return; }
+    b.onclick = (ev) => {
+      if (i === stack.length - 1) {
+        if (n.home) return;
+        if (ev.ctrlKey || ev.metaKey) aiExpand(n);
+        else openDrawer(n);
+        return;
+      }
       const prev = stack[stack.length - 1];
       stack = stack.slice(0, i + 1);
       closeDrawer();

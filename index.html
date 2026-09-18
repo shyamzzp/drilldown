@@ -108,6 +108,20 @@
   .cbadge circle { fill: var(--ink-1); opacity: .88; }
   .cbadge text { fill: var(--surface-1); font-size: 10px; font-weight: 700;
                  text-anchor: middle; dominant-baseline: central; }
+  .dbadge { cursor: pointer; opacity: 0; transition: opacity .15s; }
+  .tile:hover .dbadge { opacity: 1; }
+  .dbadge circle { fill: var(--surface-1); stroke: var(--hairline); }
+  .dbadge text { fill: var(--ink-2); font-size: 12px; font-weight: 700;
+                 text-anchor: middle; dominant-baseline: central; }
+  .dbadge:hover circle { fill: #d03b3b; }
+  .dbadge:hover text { fill: #ffffff; }
+  #addTile {
+    border: 1px solid var(--hairline); background: var(--surface-1);
+    color: var(--ink-1); font: inherit; font-size: 13px; flex: 0 0 auto;
+    padding: 4px 12px; border-radius: 6px; cursor: pointer;
+  }
+  #addTile:disabled { opacity: .4; cursor: default; }
+  #addTile:not(:disabled):hover { background: var(--grid); }
   .cmt { border-top: 1px solid var(--hairline); padding: 8px 0; }
   .cmt .cact { float: right; display: inline-flex; gap: 2px; }
   .cbtn {
@@ -230,6 +244,7 @@
   <div id="crumbs"></div>
   <span id="modePill">💬 Comment mode: click a tile to comment on it (c to exit)</span>
   <span id="aiPill"></span>
+  <button id="addTile" title="Add a tile under the current level">+ Add tile</button>
   <div id="search">
     <input id="searchInput" type="text" placeholder="Search components...  ( / )" autocomplete="off" spellcheck="false">
     <div id="searchResults"></div>
@@ -268,6 +283,45 @@ async function loadTopics() {
 }
 
 let DATA = null;
+let DELETED = new Set();   // tombstoned node paths
+
+async function sbGet(pathAndQuery) {
+  const r = await fetch(`${SB_URL}/rest/v1/${pathAndQuery}`, {
+    headers: { apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}` }
+  });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+async function loadUserTiles() {
+  try {
+    return await sbGet("drilldown_user_tiles?select=id,parent_path,name,descr&order=created_at.asc");
+  } catch (e) { console.warn("user tiles fetch failed:", e); return []; }
+}
+
+async function loadDeleted() {
+  try {
+    const rows = await sbGet("drilldown_deleted_tiles?select=node_path");
+    return new Set(rows.map(x => x.node_path));
+  } catch (e) { console.warn("tombstones fetch failed:", e); return new Set(); }
+}
+
+/* attach user tiles under their parent path, then drop tombstoned subtrees */
+function attachUserTiles(node, path, byParent) {
+  const mine = byParent[path.join("/")];
+  if (mine) {
+    node.children = (node.children || []).concat(
+      mine.map(t => ({ name: t.name, desc: t.descr || "", user: true })));
+  }
+  (node.children || []).forEach(c => attachUserTiles(c, path.concat(c.name), byParent));
+}
+
+function pruneDeleted(node, path) {
+  if (!node.children) return;
+  node.children = node.children.filter(c => !DELETED.has(path.concat(c.name).join("/")));
+  node.children.forEach(c => pruneDeleted(c, path.concat(c.name)));
+  if (!node.children.length && !node.home) delete node.children;
+}
 
 /* ---------------- comments ---------------- */
 let COMMENTS = {};   // node_path -> [{id, author, body, created_at}]
@@ -397,10 +451,18 @@ function render(direction, originRect) {
   const badged = tile.filter(d => (COMMENTS[pathKey(d.data.src)] || []).length > 0)
     .append("g")
     .attr("class", "cbadge")
-    .attr("transform", d => `translate(${Math.max(16, d.x1 - d.x0 - 16)},15)`)
+    .attr("transform", d => `translate(${Math.max(16, d.x1 - d.x0 - 38)},15)`)
     .on("click", (ev, d) => { ev.stopPropagation(); openComments(d.data.src); });
   badged.append("circle").attr("r", 9);
   badged.append("text").text(d => (COMMENTS[pathKey(d.data.src)] || []).length);
+
+  const del = tile.append("g")
+    .attr("class", "dbadge")
+    .attr("transform", d => `translate(${Math.max(16, d.x1 - d.x0 - 16)},15)`)
+    .on("click", (ev, d) => { ev.stopPropagation(); deleteTile(d.data.src); });
+  del.append("circle").attr("r", 9);
+  del.append("text").text("×");
+  del.append("title").text("Delete tile");
 
   /* zoom transition */
   if (oldG.node()) {
@@ -453,6 +515,86 @@ function tileLabel(d, view) {
   return out;
 }
 
+/* ---------------- add / delete tiles ---------------- */
+function openAddForm() {
+  const cur = stack[stack.length - 1];
+  if (cur.home) return;
+  let html = `<h2>➕ Add tile</h2>`;
+  html += `<div class="path">under: ${escapeHtml(pathKey(cur))}</div>`;
+  html += `<div id="cform">
+    <input id="tName" placeholder="Tile header" maxlength="60">
+    <textarea id="tDesc" placeholder="Description..." maxlength="500"></textarea>
+    <div><button id="tSave">Add tile</button></div>
+    <div class="err" id="tErr"></div>
+  </div>`;
+  document.getElementById("panelContent").innerHTML = html;
+  document.getElementById("tSave").onclick = () => saveTile(cur);
+  panelEl.classList.add("open");
+  panelEl.setAttribute("aria-hidden", "false");
+  scrimEl.classList.add("open");
+  setTimeout(() => document.getElementById("tName")?.focus(), 300);
+}
+
+async function saveTile(cur) {
+  const name = document.getElementById("tName").value.trim();
+  const descr = document.getElementById("tDesc").value.trim();
+  const err = document.getElementById("tErr");
+  if (!name) { err.textContent = "Header is required."; return; }
+  if ((cur.children || []).some(c => c.name === name)) {
+    err.textContent = "A tile with this header already exists here."; return;
+  }
+  const btn = document.getElementById("tSave");
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/drilldown_user_tiles`, {
+      method: "POST",
+      headers: {
+        apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ parent_path: pathKey(cur), name, descr, client_id: CLIENT_ID })
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    cur.children = (cur.children || []).concat([{ name, desc: descr, user: true }]);
+    annotate(DATA, 0, [], 0);
+    buildSearchIndex();
+    render("none");
+    closeDrawer();
+  } catch (e) {
+    err.textContent = "Failed to save: " + e.message;
+    btn.disabled = false;
+  }
+}
+
+async function deleteTile(n) {
+  const what = n.children ? `"${n.name}" and everything under it` : `"${n.name}"`;
+  if (!confirm(`Delete ${what}?`)) return;
+  try {
+    const r = await fetch(`${SB_URL}/rest/v1/drilldown_deleted_tiles?on_conflict=node_path`, {
+      method: "POST",
+      headers: {
+        apikey: SB_ANON, Authorization: `Bearer ${SB_ANON}`,
+        "Content-Type": "application/json",
+        Prefer: "resolution=ignore-duplicates"
+      },
+      body: JSON.stringify({ node_path: pathKey(n), client_id: CLIENT_ID })
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    DELETED.add(pathKey(n));
+    const parent = stack[stack.length - 1];
+    parent.children = (parent.children || []).filter(c => c !== n);
+    if (!parent.children.length && !parent.home) delete parent.children;
+    annotate(DATA, 0, [], 0);
+    buildSearchIndex();
+    closeDrawer();
+    if (!parent.children && !parent.home) goUp();   // level emptied out
+    else render("none");
+  } catch (e) {
+    alert("Delete failed: " + e.message);
+  }
+}
+document.getElementById("addTile").onclick = openAddForm;
+
 /* ---------------- AI expand ---------------- */
 let aiBusy = false, aiPillTimer = null;
 function showAiPill(text, hideMs) {
@@ -484,6 +626,7 @@ async function aiExpand(n) {
     if (!r.ok || out.error) throw new Error(out.error || "HTTP " + r.status);
     const kids = out.children
       .filter(c => !(n.children || []).some(x => x.name === c.name))
+      .filter(c => !DELETED.has(pathKey(n) + "/" + c.name))
       .map(c => ({ ...c, ai: true }));
     n.children = (n.children || []).concat(kids);
     n.aiLoaded = true;
@@ -713,6 +856,8 @@ function renderCrumbs() {
   back.disabled = stack.length <= 1;
   back.onclick = goUp;
   el.appendChild(back);
+  const add = document.getElementById("addTile");
+  if (add) add.disabled = stack[stack.length - 1].home;
   stack.forEach((n, i) => {
     if (i > 0) {
       const s = document.createElement("span");
@@ -853,8 +998,15 @@ document.addEventListener("fullscreenchange", () => render("none"));
 window.addEventListener("resize", () => render("none"));
 
 (async function init() {
-  const [topics] = await Promise.all([loadTopics(), loadComments()]);
+  const [topics, userTiles, deleted] = await Promise.all([
+    loadTopics(), loadUserTiles(), loadDeleted(), loadComments()
+  ]);
+  DELETED = deleted;
   DATA = { name: "Topics", desc: "", home: true, children: topics };
+  const byParent = {};
+  for (const t of userTiles) (byParent[t.parent_path] ||= []).push(t);
+  attachUserTiles(DATA, [], byParent);
+  pruneDeleted(DATA, []);
   annotate(DATA, 0, [], 0);
   stack = [DATA];
   buildSearchIndex();
